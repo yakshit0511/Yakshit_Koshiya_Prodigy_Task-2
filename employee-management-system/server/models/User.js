@@ -26,7 +26,7 @@ const userSchema = new mongoose.Schema(
       unique: true,
       lowercase: true,
       match: [
-        /^\\w+([\\.-]?\\w+)*@\\w+([\\.-]?\\w+)*(\\.\\w{2,3})+$/,
+        /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,})+$/,
         "Please provide a valid email address",
       ],
     },
@@ -35,7 +35,17 @@ const userSchema = new mongoose.Schema(
     password: {
       type: String,
       required: [true, "Please provide a password"],
-      minlength: [6, "Password must be at least 6 characters long"],
+      minlength: [8, "Password must be at least 8 characters long"],
+      validate: {
+        validator: function (value) {
+          return /[a-z]/.test(value)
+            && /[A-Z]/.test(value)
+            && /[0-9]/.test(value)
+            && /[^A-Za-z0-9]/.test(value);
+        },
+        message:
+          "Password must include uppercase, lowercase, number, and special character",
+      },
       select: false, // Don't return password by default in queries
     },
 
@@ -51,6 +61,16 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+
+    failedLoginAttempts: {
+      type: Number,
+      default: 0,
+    },
+
+    lockUntil: {
+      type: Date,
+      default: null,
+    },
   },
   {
     // Automatically add createdAt and updatedAt timestamps
@@ -62,21 +82,20 @@ const userSchema = new mongoose.Schema(
  * Pre-save middleware to hash password before storing
  * This ensures passwords are never stored in plain text
  */
-userSchema.pre("save", async function (next) {
+userSchema.pre("save", async function () {
   // Only hash the password if it has been modified (or is new)
   if (!this.isModified("password")) {
-    return next();
+    return;
   }
 
   try {
     // Generate salt for hashing (10 rounds for security)
-    const salt = await bcrypt.genSalt(10);
+    const salt = await bcrypt.genSalt(12);
 
     // Hash the password with the generated salt
     this.password = await bcrypt.hash(this.password, salt);
-    next();
   } catch (error) {
-    next(error);
+    throw error;
   }
 });
 

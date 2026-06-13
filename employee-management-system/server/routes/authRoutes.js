@@ -6,11 +6,13 @@ const { body } = require("express-validator");
 const {
   register,
   login,
+  refreshToken,
+  changePassword,
   getMe,
   logout,
 } = require("../controllers/authController");
 const { protect } = require("../middleware/authMiddleware");
-const { authorize } = require("../middleware/roleMiddleware");
+const { authLimiter } = require('../middleware/rateLimiters');
 
 const router = express.Router();
 
@@ -26,6 +28,7 @@ const router = express.Router();
  */
 router.post(
   "/register",
+  authLimiter,
   [
     // Name validation
     body("name")
@@ -48,8 +51,15 @@ router.post(
     body("password")
       .notEmpty()
       .withMessage("Password is required")
-      .isLength({ min: 6 })
-      .withMessage("Password must be at least 6 characters long"),
+      .custom((value) => {
+        if (value.length < 8) {
+          throw new Error('Password must be at least 8 characters long');
+        }
+        if (!/[a-z]/.test(value) || !/[A-Z]/.test(value) || !/[0-9]/.test(value) || !/[^A-Za-z0-9]/.test(value)) {
+          throw new Error('Password must include uppercase, lowercase, number, and special character');
+        }
+        return true;
+      }),
   ],
   register
 );
@@ -65,6 +75,7 @@ router.post(
  */
 router.post(
   "/login",
+  authLimiter,
   [
     // Email validation
     body("email")
@@ -83,6 +94,29 @@ router.post(
   login
 );
 
+router.post('/refresh-token', refreshToken);
+
+router.post(
+  '/change-password',
+  protect,
+  [
+    body('currentPassword').notEmpty().withMessage('Current password is required'),
+    body('newPassword')
+      .notEmpty()
+      .withMessage('New password is required')
+      .custom((value) => {
+        if (value.length < 8) {
+          throw new Error('Password must be at least 8 characters long');
+        }
+        if (!/[a-z]/.test(value) || !/[A-Z]/.test(value) || !/[0-9]/.test(value) || !/[^A-Za-z0-9]/.test(value)) {
+          throw new Error('Password must include uppercase, lowercase, number, and special character');
+        }
+        return true;
+      }),
+  ],
+  changePassword
+);
+
 /**
  * GET /api/auth/me
  * Get currently authenticated user's profile
@@ -96,6 +130,7 @@ router.get("/me", protect, getMe);
  * Authentication required: Bearer token in Authorization header
  * Note: With JWT, logout is primarily client-side (remove token from storage)
  */
-router.get("/logout", protect, logout);
+router.post('/logout', logout);
+router.get('/logout', logout);
 
 module.exports = router;

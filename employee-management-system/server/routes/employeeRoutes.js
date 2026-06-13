@@ -2,7 +2,7 @@
 // Defines API endpoints for employee management
 
 const express = require('express');
-const { body } = require('express-validator');
+const { body, param } = require('express-validator');
 const {
   getAllEmployees,
   getEmployeeById,
@@ -21,6 +21,8 @@ const { advancedSearch, getAdvancedStats } = require('../controllers/advancedCon
 
 const { protect } = require('../middleware/authMiddleware');
 const { adminOnly } = require('../middleware/roleMiddleware');
+const { employeeLimiter, uploadLimiter } = require('../middleware/rateLimiters');
+const validateRequest = require('../middleware/validateRequest');
 const upload = require('../middleware/upload');
 const documentUpload = require('../middleware/documentUpload');
 
@@ -28,49 +30,61 @@ const router = express.Router();
 
 // Validation rules for employee creation / update
 const employeeValidation = [
-  body('firstName').notEmpty().withMessage('First name required'),
-  body('lastName').notEmpty().withMessage('Last name required'),
+  body('firstName').trim().matches(/^[A-Za-z ]+$/).withMessage('First name must contain only letters and spaces'),
+  body('lastName').trim().matches(/^[A-Za-z ]+$/).withMessage('Last name must contain only letters and spaces'),
   body('email').isEmail().withMessage('Valid email required'),
-  body('phone').matches(/^\+?[0-9]{7,15}$/).withMessage('Valid phone required'),
-  body('department').notEmpty().withMessage('Department required'),
-  body('designation').notEmpty().withMessage('Designation required'),
+  body('phone').matches(/^[0-9]{10}$/).withMessage('Phone must be exactly 10 digits'),
+  body('department').isIn(['Engineering', 'HR', 'Sales', 'Marketing', 'Finance', 'Operations', 'Design', 'Legal']).withMessage('Department required'),
+  body('designation').trim().isLength({ min: 2, max: 100 }).withMessage('Designation is required'),
   body('employmentType').isIn(['Full-Time', 'Part-Time', 'Contract', 'Intern']).withMessage('Invalid employment type'),
-  body('salary').isFloat({ min: 0 }).withMessage('Salary must be a positive number'),
-  body('joiningDate').isISO8601().toDate().withMessage('Valid joining date required'),
+  body('salary').isFloat({ min: 0, max: 100000000 }).withMessage('Salary must be a positive number up to 10 crore'),
+  body('joiningDate').custom((value) => {
+    const joiningDate = new Date(value);
+    if (Number.isNaN(joiningDate.getTime())) {
+      throw new Error('Valid joining date required');
+    }
+    const maxAllowed = new Date();
+    maxAllowed.setFullYear(maxAllowed.getFullYear() + 1);
+    if (joiningDate > maxAllowed) {
+      throw new Error('Joining date cannot be more than 1 year in the future');
+    }
+    return true;
+  }),
   body('status').isIn(['Active', 'Inactive', 'On Leave']).withMessage('Invalid status'),
+  body('address.pincode').optional().matches(/^[0-9]{6}$/).withMessage('Pincode must be exactly 6 digits'),
 ];
 
 // Dashboard / aggregate statistics
-router.get('/dashboard/stats', protect, adminOnly, getDashboardStats);
-router.get('/stats/advanced', protect, adminOnly, getAdvancedStats);
+router.get('/dashboard/stats', protect, adminOnly, employeeLimiter, getDashboardStats);
+router.get('/stats/advanced', protect, adminOnly, employeeLimiter, getAdvancedStats);
 
 // Advanced search
-router.get('/search/advanced', protect, adminOnly, advancedSearch);
+router.get('/search/advanced', protect, adminOnly, employeeLimiter, advancedSearch);
 
 // Exports
-router.get('/export/csv', protect, adminOnly, exportCsv);
-router.get('/export/pdf', protect, adminOnly, exportPdf);
+router.get('/export/csv', protect, adminOnly, employeeLimiter, exportCsv);
+router.get('/export/pdf', protect, adminOnly, employeeLimiter, exportPdf);
 
 // Bulk Operations
-router.post('/bulk-delete', protect, adminOnly, bulkDeleteEmployees);
-router.post('/bulk-status-update', protect, adminOnly, bulkStatusUpdate);
+router.post('/bulk-delete', protect, adminOnly, employeeLimiter, bulkDeleteEmployees);
+router.post('/bulk-status-update', protect, adminOnly, employeeLimiter, bulkStatusUpdate);
 
 // Basic CRUD
-router.get('/', protect, adminOnly, getAllEmployees);
-router.get('/:id', protect, adminOnly, getEmployeeById);
-router.post('/', protect, adminOnly, employeeValidation, createEmployee);
-router.put('/:id', protect, adminOnly, employeeValidation, updateEmployee);
-router.delete('/:id', protect, adminOnly, softDeleteEmployee);
-router.delete('/:id/permanent', protect, adminOnly, permanentDeleteEmployee);
-router.post('/:id/photo', protect, adminOnly, upload.single('photo'), uploadPhoto);
+router.get('/', protect, adminOnly, employeeLimiter, getAllEmployees);
+router.get('/:id', protect, adminOnly, employeeLimiter, param('id').isMongoId().withMessage('Invalid ID format'), validateRequest, getEmployeeById);
+router.post('/', protect, adminOnly, employeeLimiter, employeeValidation, createEmployee);
+router.put('/:id', protect, adminOnly, employeeLimiter, param('id').isMongoId().withMessage('Invalid ID format'), validateRequest, employeeValidation, updateEmployee);
+router.delete('/:id', protect, adminOnly, employeeLimiter, param('id').isMongoId().withMessage('Invalid ID format'), validateRequest, softDeleteEmployee);
+router.delete('/:id/permanent', protect, adminOnly, employeeLimiter, param('id').isMongoId().withMessage('Invalid ID format'), validateRequest, permanentDeleteEmployee);
+router.post('/:id/photo', protect, adminOnly, uploadLimiter, param('id').isMongoId().withMessage('Invalid ID format'), validateRequest, upload.single('photo'), uploadPhoto);
 
 // Salary History
-router.get('/:id/salary-history', protect, adminOnly, getSalaryHistory);
-router.post('/:id/salary', protect, adminOnly, updateSalary);
+router.get('/:id/salary-history', protect, adminOnly, employeeLimiter, param('id').isMongoId().withMessage('Invalid ID format'), validateRequest, getSalaryHistory);
+router.post('/:id/salary', protect, adminOnly, employeeLimiter, param('id').isMongoId().withMessage('Invalid ID format'), validateRequest, updateSalary);
 
 // Documents
-router.post('/:id/documents', protect, adminOnly, documentUpload.single('document'), uploadDocument);
-router.delete('/:id/documents/:docId', protect, adminOnly, deleteDocument);
+router.post('/:id/documents', protect, adminOnly, uploadLimiter, param('id').isMongoId().withMessage('Invalid ID format'), validateRequest, documentUpload.single('document'), uploadDocument);
+router.delete('/:id/documents/:docId', protect, adminOnly, employeeLimiter, param('id').isMongoId().withMessage('Invalid ID format'), param('docId').isMongoId().withMessage('Invalid ID format'), validateRequest, deleteDocument);
 
 module.exports = router;
 

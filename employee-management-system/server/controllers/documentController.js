@@ -4,6 +4,13 @@ const ActivityLog = require('../models/ActivityLog');
 const asyncHandler = require('express-async-handler');
 const fs = require('fs');
 const path = require('path');
+const { randomUUID } = require('crypto');
+
+const uploadPath = path.join(__dirname, '..', 'uploads');
+
+if (!fs.existsSync(uploadPath)) {
+  fs.mkdirSync(uploadPath, { recursive: true });
+}
 
 // @desc    Upload document for an employee
 // @route   POST /api/employees/:id/documents
@@ -16,16 +23,35 @@ const uploadDocument = asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: 'No file uploaded' });
   }
 
+  const { fileTypeFromBuffer } = await import('file-type');
+  const detectedType = await fileTypeFromBuffer(req.file.buffer);
+  const allowedMimeTypes = [
+    'image/jpeg',
+    'image/png',
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'text/plain',
+  ];
+
+  if (!detectedType && !allowedMimeTypes.includes(req.file.mimetype)) {
+    return res.status(400).json({ success: false, message: 'Invalid file type' });
+  }
+
+  const normalizedExtension = detectedType?.ext || path.extname(req.file.originalname).replace('.', '').toLowerCase() || 'bin';
+  const fileName = `${randomUUID()}.${normalizedExtension === 'jpeg' ? 'jpg' : normalizedExtension}`;
+  const filePath = path.join(uploadPath, fileName);
+  await fs.promises.writeFile(filePath, req.file.buffer);
+
   const employee = await Employee.findById(id);
   if (!employee) {
-    // Delete uploaded file if employee is not found
-    fs.unlinkSync(req.file.path);
+    await fs.promises.unlink(filePath).catch(() => {});
     return res.status(404).json({ success: false, message: 'Employee not found' });
   }
 
-  const docUrl = `/uploads/${req.file.filename}`;
+  const docUrl = `/uploads/${fileName}`;
   const newDoc = {
-    name: name || req.file.originalname,
+    name: name || 'Uploaded Document',
     fileUrl: docUrl,
     uploadedBy: req.user.id
   };

@@ -5,6 +5,17 @@ const Employee = require('../models/Employee');
 const ActivityLog = require('../models/ActivityLog');
 const SalaryHistory = require('../models/SalaryHistory');
 const { validationResult } = require('express-validator');
+const NodeCache = require('node-cache');
+const fs = require('fs');
+const path = require('path');
+const { randomUUID } = require('crypto');
+
+const statsCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
+const uploadPath = path.join(__dirname, '..', 'uploads');
+
+if (!fs.existsSync(uploadPath)) {
+  fs.mkdirSync(uploadPath, { recursive: true });
+}
 
 /**
  * Helper to format API response
@@ -49,6 +60,7 @@ const getAllEmployees = async (req, res) => {
       limit: parseInt(limit, 10),
       sort: { [sort]: order === 'asc' ? 1 : -1 },
       lean: true,
+      select: 'firstName lastName email phone department designation employmentType salary joiningDate status profilePhoto employeeId createdBy createdAt updatedAt',
       populate: { path: 'createdBy', select: 'name email' },
     };
 
@@ -257,13 +269,25 @@ const uploadPhoto = async (req, res) => {
     if (!req.file) {
       return sendResponse(res, 400, false, null, 'No file uploaded');
     }
-    const photoPath = `/uploads/${req.file.filename}`;
+
+    const { fileTypeFromBuffer } = await import('file-type');
+    const detectedType = await fileTypeFromBuffer(req.file.buffer);
+    if (!detectedType || !['jpg', 'jpeg', 'png'].includes(detectedType.ext)) {
+      return sendResponse(res, 400, false, null, 'Invalid file type');
+    }
+
+    const fileName = `${randomUUID()}.${detectedType.ext === 'jpeg' ? 'jpg' : detectedType.ext}`;
+    const filePath = path.join(uploadPath, fileName);
+    await fs.promises.writeFile(filePath, req.file.buffer);
+
+    const photoPath = `/uploads/${fileName}`;
     const employee = await Employee.findByIdAndUpdate(
       id,
       { profilePhoto: photoPath },
       { new: true }
     );
     if (!employee) {
+      await fs.promises.unlink(filePath).catch(() => {});
       return sendResponse(res, 404, false, null, 'Employee not found');
     }
     return sendResponse(res, 200, true, employee, 'Profile photo uploaded');
@@ -279,34 +303,74 @@ const uploadPhoto = async (req, res) => {
  */
 const getDashboardStats = async (req, res) => {
   try {
-    const total = await Employee.countDocuments();
-    const active = await Employee.countDocuments({ status: 'Active' });
+    const cachedStats = statsCache.get('dashboardStats');
+    if (cachedStats) {
+      return sendResponse(res, 200, true, cachedStats, 'Dashboard statistics retrieved');
+    }
 
-    const deptAgg = await Employee.aggregate([
-      { $group: { _id: '$department', count: { $sum: 1 } } },
+    const [summary] = await Employee.aggregate([
+      {
+        $facet: {
+          totals: [
+            {
+              $group: {
+                _id: null,
+                totalEmployees: { $sum: 1 },
+                activeEmployees: {
+                  $sum: { $cond: [{ $eq: ['$status', 'Active'] }, 1, 0] },
+                },
+              },
+            },
+          ],
+          departments: [
+            { $group: { _id: '$department', count: { $sum: 1 } } },
+          ],
+          employmentTypes: [
+            { $group: { _id: '$employmentType', count: { $sum: 1 } } },
+          ],
+          recentJoinees: [
+            { $sort: { createdAt: -1 } },
+            { $limit: 5 },
+            {
+              $project: {
+                firstName: 1,
+                lastName: 1,
+                email: 1,
+                phone: 1,
+                department: 1,
+                designation: 1,
+                employmentType: 1,
+                salary: 1,
+                joiningDate: 1,
+                status: 1,
+                createdAt: 1,
+                employeeId: 1,
+              },
+            },
+          ],
+        },
+      },
     ]);
+
+    const total = summary?.totals?.[0]?.totalEmployees || 0;
+    const active = summary?.totals?.[0]?.activeEmployees || 0;
     const deptCounts = {};
-    deptAgg.forEach((d) => (deptCounts[d._id] = d.count));
-
-    const typeAgg = await Employee.aggregate([
-      { $group: { _id: '$employmentType', count: { $sum: 1 } } },
-    ]);
+    (summary?.departments || []).forEach((d) => (deptCounts[d._id] = d.count));
     const typeCounts = {};
-    typeAgg.forEach((t) => (typeCounts[t._id] = t.count));
+    (summary?.employmentTypes || []).forEach((t) => (typeCounts[t._id] = t.count));
+    const recent = summary?.recentJoinees || [];
 
-    const recent = await Employee.find({
-      createdAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
-    })
-      .sort({ createdAt: -1 })
-      .limit(5);
-
-    return sendResponse(res, 200, true, {
+    const payload = {
       totalEmployees: total,
       activeEmployees: active,
       departmentWise: deptCounts,
       employmentTypeWise: typeCounts,
       recentJoinees: recent,
-    },
+    };
+
+    statsCache.set('dashboardStats', payload);
+
+    return sendResponse(res, 200, true, payload,
     'Dashboard statistics retrieved');
   } catch (error) {
     console.error('Error fetching dashboard stats:', error);

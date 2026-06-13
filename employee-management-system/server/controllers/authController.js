@@ -3,20 +3,59 @@ const User = require('../models/User');
 const jwt = require('jsonwebtoken');
 const ActivityLog = require('../models/ActivityLog');
 const { validationResult } = require('express-validator');
+const {
+  blacklistRefreshToken,
+  isRefreshTokenBlacklisted,
+} = require('../utils/tokenStore');
 
-// Helper to generate JWT
-const generateToken = (user) => {
-  return jwt.sign(
-    { id: user._id, role: user.role },
-    process.env.JWT_SECRET || 'fallback_secret',
-    { expiresIn: '30d' }
-  );
+const ACCESS_TOKEN_SECRET = process.env.JWT_SECRET || 'fallback_secret';
+const REFRESH_TOKEN_SECRET = process.env.JWT_REFRESH_SECRET || ACCESS_TOKEN_SECRET;
+const ACCESS_TOKEN_EXPIRES = process.env.JWT_ACCESS_EXPIRE || '15m';
+const REFRESH_TOKEN_EXPIRES = process.env.JWT_REFRESH_EXPIRE || '7d';
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCK_TIME_MS = 30 * 60 * 1000;
+
+const cookieOptions = {
+  httpOnly: true,
+  sameSite: 'lax',
+  secure: process.env.NODE_ENV === 'production',
+  path: '/api/auth',
 };
 
-// @desc    Register new user
-// @route   POST /api/auth/register
-// @access  Public
-const register = async (req, res) => {
+const sanitizeUser = (user) => ({
+  id: user._id,
+  name: user.name,
+  email: user.email,
+  role: user.role,
+});
+
+const generateAccessToken = (user) =>
+  jwt.sign({ id: user._id, role: user.role }, ACCESS_TOKEN_SECRET, {
+    expiresIn: ACCESS_TOKEN_EXPIRES,
+  });
+
+const generateRefreshToken = (user) =>
+  jwt.sign({ id: user._id, role: user.role }, REFRESH_TOKEN_SECRET, {
+    expiresIn: REFRESH_TOKEN_EXPIRES,
+  });
+
+const attachRefreshCookie = (res, refreshToken) => {
+  res.cookie('refreshToken', refreshToken, cookieOptions);
+};
+
+const clearRefreshCookie = (res) => {
+  res.clearCookie('refreshToken', cookieOptions);
+};
+
+const logActivity = async (payload) => {
+  try {
+    await ActivityLog.create(payload);
+  } catch (error) {
+    console.error('Activity log error:', error.message);
+  }
+};
+
+const register = async (req, res, next) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -24,53 +63,44 @@ const register = async (req, res) => {
     }
 
     const { name, email, password, role } = req.body;
+    const normalizedEmail = String(email).trim().toLowerCase();
 
-    const userExists = await User.findOne({ email });
+    const userExists = await User.findOne({ email: normalizedEmail });
     if (userExists) {
       return res.status(400).json({ success: false, message: 'User already exists' });
     }
 
-    // Determine role - default to user, but allow passing role
-    const finalRole = role || 'user';
-
     const user = await User.create({
       name,
-      email,
+      email: normalizedEmail,
       password,
-      role: finalRole
+      role: role || 'user',
     });
 
-    const token = generateToken(user);
+    const accessToken = generateAccessToken(user);
+    const refreshToken = generateRefreshToken(user);
+    attachRefreshCookie(res, refreshToken);
 
-    // Log Activity
-    await ActivityLog.create({
-      action: 'LOGIN',
+    await logActivity({
+      action: 'CREATED',
       performedBy: user._id,
-      description: `User registered and logged in: ${user.name} (${user.email})`,
+      description: `User registered: ${user.name} (${user.email})`,
       ipAddress: req.ip,
-      userAgent: req.get('User-Agent')
+      userAgent: req.get('User-Agent'),
     });
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role
-      }
+      token: accessToken,
+      accessToken,
+      user: sanitizeUser(user),
     });
   } catch (error) {
-    console.error('Registration error:', error);
-    res.status(500).json({ success: false, message: 'Registration failed', error: error.message });
+    return next(error);
   }
 };
 
-// @desc    Login user
-// @route   POST /api/auth/login
-// @access  Public
-const login = async (req, res) => {
+const login = async (req, res, next) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -78,84 +108,183 @@ const login = async (req, res) => {
     }
 
     const { email, password } = req.body;
+    const normalizedEmail = String(email).trim().toLowerCase();
 
-    // Use select('+password') because select: false in schema
-    const user = await User.findOne({ email }).select('+password');
+    const user = await User.findOne({ email: normalizedEmail }).select(
+      '+password +failedLoginAttempts +lockUntil'
+    );
+
     if (!user) {
+      console.warn(`Failed login attempt for unknown email: ${normalizedEmail} from ${req.ip}`);
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
-    const isMatch = await user.matchPassword(password);
-    if (!isMatch) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials' });
+    if (user.lockUntil && user.lockUntil > Date.now()) {
+      return res.status(423).json({
+        success: false,
+        message: 'Account is locked due to too many failed login attempts. Please try again later.',
+      });
     }
 
     if (!user.isActive) {
       return res.status(401).json({ success: false, message: 'Account is deactivated' });
     }
 
-    const token = generateToken(user);
+    const isMatch = await user.matchPassword(password);
+    if (!isMatch) {
+      user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+      if (user.failedLoginAttempts >= MAX_LOGIN_ATTEMPTS) {
+        user.lockUntil = new Date(Date.now() + LOCK_TIME_MS);
+        user.failedLoginAttempts = 0;
+      }
+      await user.save({ validateBeforeSave: false });
 
-    // Log Activity
-    await ActivityLog.create({
+      await logActivity({
+        action: 'LOGIN',
+        performedBy: user._id,
+        description: `Failed login attempt for ${user.email}`,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+      });
+
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
+    }
+
+    user.failedLoginAttempts = 0;
+    user.lockUntil = null;
+    await user.save({ validateBeforeSave: false });
+
+    const accessToken = generateAccessToken(user);
+    const refreshToken = generateRefreshToken(user);
+    attachRefreshCookie(res, refreshToken);
+
+    await logActivity({
       action: 'LOGIN',
       performedBy: user._id,
       description: `User logged in: ${user.name} (${user.email})`,
       ipAddress: req.ip,
-      userAgent: req.get('User-Agent')
+      userAgent: req.get('User-Agent'),
     });
 
-    res.json({
+    return res.json({
       success: true,
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role
-      }
+      token: accessToken,
+      accessToken,
+      user: sanitizeUser(user),
     });
   } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ success: false, message: 'Login failed', error: error.message });
+    return next(error);
   }
 };
 
-// @desc    Get currently logged in user
-// @route   GET /api/auth/me
-// @access  Private
-const getMe = async (req, res) => {
+const refreshToken = async (req, res, next) => {
   try {
-    const user = await User.findById(req.user.id);
+    const token = req.cookies?.refreshToken;
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'No refresh token provided' });
+    }
+
+    if (isRefreshTokenBlacklisted(token)) {
+      return res.status(401).json({ success: false, message: 'Token has been revoked' });
+    }
+
+    const decoded = jwt.verify(token, REFRESH_TOKEN_SECRET);
+    const user = await User.findById(decoded.id).select('-password');
+
+    if (!user || !user.isActive) {
+      return res.status(401).json({ success: false, message: 'Invalid refresh token' });
+    }
+
+    const accessToken = generateAccessToken(user);
+    return res.json({
+      success: true,
+      token: accessToken,
+      accessToken,
+      user: sanitizeUser(user),
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+const changePassword = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { currentPassword, newPassword } = req.body;
+    const user = await User.findById(req.user.id).select('+password');
+
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
-    res.json({ success: true, user });
-  } catch (error) {
-    console.error('Get profile error:', error);
-    res.status(500).json({ success: false, message: 'Failed to retrieve profile', error: error.message });
-  }
-};
 
-// @desc    Logout user
-// @route   GET /api/auth/logout
-// @access  Private
-const logout = async (req, res) => {
-  try {
-    // Log Activity
-    await ActivityLog.create({
-      action: 'LOGOUT',
-      performedBy: req.user.id,
-      description: `User logged out`,
+    const isMatch = await user.matchPassword(currentPassword);
+    if (!isMatch) {
+      return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+    }
+
+    user.password = newPassword;
+    await user.save();
+
+    await logActivity({
+      action: 'UPDATED',
+      performedBy: user._id,
+      description: `Password changed for ${user.email}`,
       ipAddress: req.ip,
-      userAgent: req.get('User-Agent')
+      userAgent: req.get('User-Agent'),
     });
 
-    res.json({ success: true, message: 'Logged out successfully' });
+    return res.json({ success: true, message: 'Password changed successfully' });
   } catch (error) {
-    console.error('Logout error:', error);
-    res.status(500).json({ success: false, message: 'Logout failed', error: error.message });
+    return next(error);
   }
 };
 
-module.exports = { register, login, getMe, logout };
+const getMe = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user.id).select('-password');
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    return res.json({ success: true, user: sanitizeUser(user) });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+const logout = async (req, res, next) => {
+  try {
+    const refreshToken = req.cookies?.refreshToken;
+    if (refreshToken) {
+      blacklistRefreshToken(refreshToken);
+    }
+
+    clearRefreshCookie(res);
+
+    if (req.user?.id) {
+      await logActivity({
+        action: 'LOGOUT',
+        performedBy: req.user.id,
+        description: 'User logged out',
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+      });
+    }
+
+    return res.json({ success: true, message: 'Logged out successfully' });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+module.exports = {
+  register,
+  login,
+  refreshToken,
+  changePassword,
+  getMe,
+  logout,
+};

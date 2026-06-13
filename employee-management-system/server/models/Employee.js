@@ -2,7 +2,6 @@
 // Defines the structure for employee documents stored in MongoDB Atlas
 
 const mongoose = require('mongoose');
-const AutoIncrement = require('mongoose-sequence')(mongoose); // for sequential employee IDs
 
 /**
  * Employee Schema
@@ -10,6 +9,11 @@ const AutoIncrement = require('mongoose-sequence')(mongoose); // for sequential 
  */
 const employeeSchema = new mongoose.Schema(
   {
+    seq: {
+      type: Number,
+      unique: true,
+      sparse: true,
+    },
     // Auto‑generated employee identifier: EMP‑001, EMP‑002, ...
     employeeId: {
       type: String,
@@ -73,22 +77,29 @@ const employeeSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Auto‑increment numeric field to generate employeeId like EMP-001
-employeeSchema.plugin(AutoIncrement, {
-  inc_field: 'seq', // internal sequential number
-  start_seq: 1,
-});
-
 const mongoosePaginate = require('mongoose-paginate-v2');
 employeeSchema.plugin(mongoosePaginate);
 
-// Before saving, set the formatted employeeId if not present
-employeeSchema.pre('save', function (next) {
-  if (!this.employeeId) {
-    const padded = String(this.seq).padStart(3, '0');
-    this.employeeId = `EMP-${padded}`;
+employeeSchema.index({ email: 1 }, { unique: true });
+employeeSchema.index({ employeeId: 1 }, { unique: true });
+employeeSchema.index({ department: 1 });
+employeeSchema.index({ status: 1 });
+employeeSchema.index({ createdAt: -1 });
+employeeSchema.index({ firstName: 1, lastName: 1 });
+
+// Before saving, assign the next sequential employee ID if not present
+employeeSchema.pre('save', async function () {
+  if (this.employeeId) {
+    return;
   }
-  next();
+
+  const lastEmployee = await this.constructor.findOne({}, { seq: 1 })
+    .sort({ seq: -1 })
+    .lean();
+
+  const nextSeq = (lastEmployee?.seq || 0) + 1;
+  this.seq = nextSeq;
+  this.employeeId = `EMP-${String(nextSeq).padStart(3, '0')}`;
 });
 
 module.exports = mongoose.model('Employee', employeeSchema);
