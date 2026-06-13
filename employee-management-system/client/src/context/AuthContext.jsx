@@ -5,7 +5,14 @@ import api from '../api/axios';
 import toast from 'react-hot-toast';
 
 // Create the Auth context
-export const AuthContext = createContext(null);
+export const AuthContext = createContext({
+  user: null,
+  isAuthenticated: false,
+  isAdmin: false,
+  login: async () => {},
+  logout: () => {},
+  loading: true,
+});
 
 export const AuthProvider = ({ children }) => {
   const navigate = useNavigate();
@@ -26,6 +33,7 @@ export const AuthProvider = ({ children }) => {
   const storeUser = (authData) => {
     const data = { ...authData, token: authData.token };
     localStorage.setItem('authUser', JSON.stringify(data));
+    localStorage.setItem('token', authData.token);
     setUser(data);
   };
 
@@ -33,10 +41,10 @@ export const AuthProvider = ({ children }) => {
   const login = async (email, password) => {
     try {
       const { data } = await api.post('/api/auth/login', { email, password });
-      // Expected response: { token, user: { _id, name, role } }
+      // Expected response: { token|accessToken, user: { id|_id, name, role } }
       const authData = {
-        token: data.token,
-        id: data.user._id,
+        token: data.accessToken || data.token,
+        id: data.user.id || data.user._id,
         name: data.user.name,
         role: data.user.role,
       };
@@ -53,6 +61,7 @@ export const AuthProvider = ({ children }) => {
   // Logout clears storage and redirects to login
   const logout = () => {
     localStorage.removeItem('authUser');
+    localStorage.removeItem('token');
     setUser(null);
     navigate('/login');
   };

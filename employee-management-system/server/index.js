@@ -6,8 +6,6 @@ const path = require('path');
 const helmet = require('helmet');
 const compression = require('compression');
 const cookieParser = require('cookie-parser');
-const mongoSanitize = require('express-mongo-sanitize');
-const xss = require('xss-clean');
 const hpp = require('hpp');
 
 // Load environment variables
@@ -63,8 +61,45 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(mongoSanitize());
-app.use(xss());
+
+// Remove any MongoDB operator keys (keys starting with '$' or containing '.')
+const sanitizeMongoOperators = (input) => {
+  if (!input || typeof input !== 'object') return;
+  Object.keys(input).forEach((key) => {
+    try {
+      if (key.startsWith('$') || key.indexOf('.') !== -1) {
+        delete input[key];
+      } else if (typeof input[key] === 'object' && input[key] !== null) {
+        sanitizeMongoOperators(input[key]);
+      }
+    } catch (e) {
+      // ignore
+    }
+  });
+};
+
+const sanitizeObjectStrings = (input) => {
+  if (!input || typeof input !== 'object') return;
+  Object.keys(input).forEach((key) => {
+    const value = input[key];
+    if (typeof value === 'string') {
+      input[key] = value.replace(/[<>]/g, '');
+    } else if (typeof value === 'object' && value !== null) {
+      sanitizeObjectStrings(value);
+    }
+  });
+};
+
+app.use((req, res, next) => {
+  sanitizeObjectStrings(req.body);
+  sanitizeObjectStrings(req.query);
+  sanitizeObjectStrings(req.params);
+
+  sanitizeMongoOperators(req.body);
+  sanitizeMongoOperators(req.query);
+  sanitizeMongoOperators(req.params);
+  next();
+});
 app.use(hpp());
 
 // Serve uploaded files for authenticated users only.

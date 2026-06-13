@@ -8,12 +8,20 @@ import {
 import {
   Users, User, Lock, Mail, Phone, MapPin, Calendar, DollarSign, LogOut, Plus, Search, Filter,
   Trash2, Edit, Download, Eye, Activity, FileText, CheckCircle, Sun, Moon, Upload, Printer,
-  Briefcase, TrendingUp, Folder, ArrowUpRight, Shield, RefreshCw, AlertTriangle
+  Briefcase, TrendingUp, Folder, ArrowUpRight, Shield, RefreshCw, AlertTriangle, Sparkles, BadgeCheck, Rocket, Star
 } from 'lucide-react';
 
 import { AuthContext, AuthProvider } from './context/AuthContext';
 import { useAuth } from './hooks/useAuth';
 import * as api from './api/employeeApi';
+import http from './api/axios';
+import {
+  ForbiddenPage,
+  NetworkErrorPage,
+  NotFoundPage,
+  ServerErrorPage,
+  UnauthorizedPage,
+} from './components/ErrorPages';
 
 // ==========================================
 // THEME COMPONENT / CUSTOM HOOK
@@ -157,7 +165,7 @@ const Layout = () => {
             <Route path="employees/:id/edit" element={<AdminRoute><EmployeeForm isEdit /></AdminRoute>} />
             <Route path="employees/:id" element={<EmployeeDetail />} />
             <Route path="activity-logs" element={<AdminRoute><ActivityLogPage /></AdminRoute>} />
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </div>
       </main>
@@ -169,10 +177,111 @@ const Layout = () => {
 // PAGES
 // ==========================================
 
+const AuthShell = ({
+  eyebrow,
+  title,
+  subtitle,
+  children,
+  footer,
+}: {
+  eyebrow: string;
+  title: string;
+  subtitle: string;
+  children: React.ReactNode;
+  footer: React.ReactNode;
+}) => {
+  const highlights = [
+    { icon: BadgeCheck, label: 'Secure JWT sessions' },
+    { icon: Sparkles, label: 'Modern CRUD workspace' },
+    { icon: Rocket, label: 'Fast, responsive workflow' },
+  ];
+
+  return (
+    <div className="auth-shell">
+      <div className="auth-card">
+        <section className="auth-hero">
+          <div className="auth-hero-badge">
+            <Sparkles size={14} />
+            <span>{eyebrow}</span>
+          </div>
+          <h1>{title}</h1>
+          <p>{subtitle}</p>
+
+          <div className="auth-feature-list">
+            {highlights.map((item) => {
+              const Icon = item.icon;
+              return (
+                <div key={item.label} className="auth-feature-item">
+                  <span className="auth-feature-icon">
+                    <Icon size={16} />
+                  </span>
+                  <span>{item.label}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="auth-stats-grid">
+            <div className="auth-stat-card">
+              <strong>5x</strong>
+              <span>Faster onboarding</span>
+            </div>
+            <div className="auth-stat-card">
+              <strong>100%</strong>
+              <span>Role protected access</span>
+            </div>
+            <div className="auth-stat-card">
+              <strong>24/7</strong>
+              <span>Realtime workforce view</span>
+            </div>
+          </div>
+
+          <div className="auth-hero-visual">
+            <div className="auth-hero-float auth-float-top">
+              <Star size={16} />
+              <div>
+                <strong>Live status</strong>
+                <span>Secure, responsive, production ready</span>
+              </div>
+            </div>
+            <div className="auth-hero-float auth-float-bottom">
+              <BadgeCheck size={16} />
+              <div>
+                <strong>HRMS Portal</strong>
+                <span>Built for efficient team management</span>
+              </div>
+            </div>
+            <div className="auth-hero-orb auth-hero-orb-1" />
+            <div className="auth-hero-orb auth-hero-orb-2" />
+            <div className="auth-hero-card auth-hero-card-main">
+              <div className="auth-hero-card-header">
+                <span className="auth-dot auth-dot-blue" />
+                <span className="auth-dot auth-dot-yellow" />
+                <span className="auth-dot auth-dot-green" />
+              </div>
+              <div className="auth-hero-bars">
+                <span style={{ height: '52%' }} />
+                <span style={{ height: '78%' }} />
+                <span style={{ height: '36%' }} />
+                <span style={{ height: '86%' }} />
+                <span style={{ height: '60%' }} />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="auth-form-panel">
+          {children}
+          <div className="auth-footer">{footer}</div>
+        </section>
+      </div>
+    </div>
+  );
+};
+
 // --- LOGIN PAGE ---
 const Login = () => {
   const { login } = useAuth();
-  const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -190,14 +299,26 @@ const Login = () => {
   };
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
-      <div className="card" style={{ width: '100%', maxWidth: '400px', padding: '32px' }}>
-        <div style={{ textAlign: 'center', marginBottom: '24px' }}>
-          <div style={{ width: '48px', height: '48px', borderRadius: 'var(--radius)', backgroundColor: 'var(--primary-light)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)', marginBottom: '16px' }}>
-            <Shield size={28} />
+    <AuthShell
+      eyebrow="Employee Management System"
+      title="Welcome back"
+      subtitle="Sign in to access your dashboard, employee records, reports, and admin tools in one polished workspace."
+      footer={
+        <p>
+          Need an account?{' '}
+          <Link to="/register" style={{ color: 'var(--primary)', fontWeight: 700, textDecoration: 'none' }}>
+            Create one now
+          </Link>
+        </p>
+      }
+    >
+      <div className="auth-form-card">
+        <div className="auth-form-header">
+          <div className="auth-icon-badge">
+            <Shield size={26} />
           </div>
-          <h2>Enterprise login</h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>Enter your credentials to access system dashboard</p>
+          <h2>Login</h2>
+          <p>Secure access to the EMS portal</p>
         </div>
         <form onSubmit={handleSubmit}>
           <div className="form-group">
@@ -232,13 +353,8 @@ const Login = () => {
             {loading ? 'Logging in...' : 'Sign In'}
           </button>
         </form>
-        <div style={{ textAlign: 'center', marginTop: '20px' }}>
-          <p style={{ fontSize: '14px', color: 'var(--text-muted)' }}>
-            Need an account? <Link to="/register" style={{ color: 'var(--primary)', fontWeight: '500', textDecoration: 'none' }}>Register here</Link>
-          </p>
-        </div>
       </div>
-    </div>
+    </AuthShell>
   );
 };
 
@@ -248,14 +364,27 @@ const Register = () => {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [role, setRole] = useState('user');
   const [loading, setLoading] = useState(false);
 
+  const passwordChecks = [
+    { label: '8+ characters', passed: password.length >= 8 },
+    { label: 'Uppercase letter', passed: /[A-Z]/.test(password) },
+    { label: 'Lowercase letter', passed: /[a-z]/.test(password) },
+    { label: 'Number', passed: /[0-9]/.test(password) },
+    { label: 'Special character', passed: /[^A-Za-z0-9]/.test(password) },
+  ];
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (password !== confirmPassword) {
+      toast.error('Confirm password must match password');
+      return;
+    }
     setLoading(true);
     try {
-      await api.api.post('/api/auth/register', { name, email, password, role });
+      await http.post('/api/auth/register', { name, email, password, role });
       toast.success('Registration successful. You can log in now.');
       navigate('/login');
     } catch (err: any) {
@@ -266,11 +395,26 @@ const Register = () => {
   };
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
-      <div className="card" style={{ width: '100%', maxWidth: '400px', padding: '32px' }}>
-        <div style={{ textAlign: 'center', marginBottom: '24px' }}>
-          <h2>Register Account</h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>Create an enterprise user account</p>
+    <AuthShell
+      eyebrow="Join the platform"
+      title="Create your account"
+      subtitle="Register to manage employees, approvals, analytics, and secure workflows with a clean admin experience."
+      footer={
+        <p>
+          Already have an account?{' '}
+          <Link to="/login" style={{ color: 'var(--primary)', fontWeight: 700, textDecoration: 'none' }}>
+            Log in here
+          </Link>
+        </p>
+      }
+    >
+      <div className="auth-form-card">
+        <div className="auth-form-header">
+          <div className="auth-icon-badge auth-icon-badge-warm">
+            <Users size={26} />
+          </div>
+          <h2>Sign up</h2>
+          <p>Create your employee management profile</p>
         </div>
         <form onSubmit={handleSubmit}>
           <div className="form-group">
@@ -302,6 +446,24 @@ const Register = () => {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
+            <div style={{ marginTop: '12px', display: 'grid', gap: '6px' }}>
+              {passwordChecks.map((check) => (
+                <div key={check.label} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: check.passed ? 'var(--success)' : 'var(--text-muted)' }}>
+                  <CheckCircle size={14} />
+                  <span>{check.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Confirm Password</label>
+            <input
+              type="password"
+              required
+              className="form-control"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+            />
           </div>
           <div className="form-group">
             <label className="form-label">Role</label>
@@ -314,13 +476,8 @@ const Register = () => {
             {loading ? 'Creating...' : 'Register'}
           </button>
         </form>
-        <div style={{ textAlign: 'center', marginTop: '20px' }}>
-          <p style={{ fontSize: '14px', color: 'var(--text-muted)' }}>
-            Already have an account? <Link to="/login" style={{ color: 'var(--primary)', fontWeight: '500', textDecoration: 'none' }}>Log In</Link>
-          </p>
-        </div>
       </div>
-    </div>
+    </AuthShell>
   );
 };
 
@@ -784,6 +941,9 @@ const EmployeeForm = ({ isEdit = false }: { isEdit?: boolean }) => {
   const [loading, setLoading] = useState(false);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string>('');
+  const maxJoiningDate = new Date();
+  maxJoiningDate.setFullYear(maxJoiningDate.getFullYear() + 1);
+  const joiningDateMax = maxJoiningDate.toISOString().split('T')[0];
 
   // Form Fields
   const [formData, setFormData] = useState({
@@ -867,13 +1027,13 @@ const EmployeeForm = ({ isEdit = false }: { isEdit?: boolean }) => {
     try {
       let createdEmpId = id;
       if (isEdit && id) {
-        await api.api.put(`/api/employees/${id}`, formData);
+        await http.put(`/api/employees/${id}`, formData);
         if (photoFile) {
           await api.uploadProfilePhoto(id, photoFile);
         }
         toast.success('Employee updated successfully');
       } else {
-        const { data } = await api.api.post('/api/employees', formData);
+        const { data } = await http.post('/api/employees', formData);
         createdEmpId = data.data._id;
         if (photoFile && createdEmpId) {
           await api.uploadProfilePhoto(createdEmpId, photoFile);
@@ -916,12 +1076,12 @@ const EmployeeForm = ({ isEdit = false }: { isEdit?: boolean }) => {
 
           <div className="form-group">
             <label className="form-label">First Name</label>
-            <input type="text" name="firstName" required className="form-control" value={formData.firstName} onChange={handleChange} />
+            <input type="text" name="firstName" required pattern="[A-Za-z ]+" title="Letters and spaces only" maxLength={50} className="form-control" value={formData.firstName} onChange={handleChange} />
           </div>
 
           <div className="form-group">
             <label className="form-label">Last Name</label>
-            <input type="text" name="lastName" required className="form-control" value={formData.lastName} onChange={handleChange} />
+            <input type="text" name="lastName" required pattern="[A-Za-z ]+" title="Letters and spaces only" maxLength={50} className="form-control" value={formData.lastName} onChange={handleChange} />
           </div>
 
           <div className="form-group">
@@ -931,7 +1091,7 @@ const EmployeeForm = ({ isEdit = false }: { isEdit?: boolean }) => {
 
           <div className="form-group">
             <label className="form-label">Phone</label>
-            <input type="text" name="phone" required className="form-control" value={formData.phone} onChange={handleChange} />
+            <input type="text" name="phone" required inputMode="numeric" pattern="[0-9]{10}" maxLength={10} title="Exactly 10 digits" className="form-control" value={formData.phone} onChange={handleChange} />
           </div>
 
           <div className="form-group">
@@ -965,12 +1125,12 @@ const EmployeeForm = ({ isEdit = false }: { isEdit?: boolean }) => {
 
           <div className="form-group">
             <label className="form-label">Salary ($)</label>
-            <input type="number" name="salary" required className="form-control" value={formData.salary} onChange={handleChange} />
+            <input type="number" name="salary" required min={0} max={100000000} step="1" className="form-control" value={formData.salary} onChange={handleChange} />
           </div>
 
           <div className="form-group">
             <label className="form-label">Joining Date</label>
-            <input type="date" name="joiningDate" required className="form-control" value={formData.joiningDate} onChange={handleChange} />
+            <input type="date" name="joiningDate" required max={joiningDateMax} className="form-control" value={formData.joiningDate} onChange={handleChange} />
           </div>
 
           <div className="form-group">
@@ -999,7 +1159,7 @@ const EmployeeForm = ({ isEdit = false }: { isEdit?: boolean }) => {
               </div>
               <div className="form-group">
                 <label className="form-label">Pincode</label>
-                <input type="text" name="address.pincode" className="form-control" value={formData.address.pincode} onChange={handleChange} />
+                <input type="text" name="address.pincode" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} title="Exactly 6 digits" className="form-control" value={formData.address.pincode} onChange={handleChange} />
               </div>
             </div>
           </div>
@@ -1610,6 +1770,10 @@ const App = () => {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/unauthorized" element={<UnauthorizedPage />} />
+        <Route path="/forbidden" element={<ForbiddenPage />} />
+        <Route path="/server-error" element={<ServerErrorPage />} />
+        <Route path="/network-error" element={<NetworkErrorPage />} />
         <Route path="/*" element={<ProtectedRoute><Layout /></ProtectedRoute>} />
       </Routes>
     </ThemeProvider>
